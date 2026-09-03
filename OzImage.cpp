@@ -340,6 +340,12 @@ namespace ozimg
         const int bytesPerPixel = (depth + 7) / 8;
         size_t pos = 18u + idLength;
 
+        // The id field can push past the end of a short file. Catch it here, or
+        // `size - pos` below wraps around and every bound derived from it is
+        // meaningless.
+        if (pos > size)
+            return E_FAIL;
+
         const BYTE* palette = nullptr;
         TgaSample paletteSample = TgaSample::Bgr24;
         if (colorMapType == 1)
@@ -353,11 +359,33 @@ namespace ozimg
             palette = data + pos;
             pos += paletteBytes;
         }
-        if (indexed && !palette)
+        // An empty color map passes the bounds check above with zero bytes,
+        // and every index would then clamp to entry 0 and read past the end of
+        // the buffer - straight into the thumbnail the caller gets back.
+        if (indexed && (!palette || cmLength == 0))
             return E_FAIL;
 
         const size_t pixelCount = static_cast<size_t>(width) * height;
         const size_t rawBytes = pixelCount * bytesPerPixel;
+
+        // Check what the file can actually deliver before allocating for what
+        // its header claims. Otherwise a 27 byte file declaring 65535x1525
+        // costs half a gigabyte before being rejected, and the shell decodes
+        // several files at once.
+        if (rle)
+        {
+            // The cheapest packet that yields pixels is a run: one header byte
+            // plus one pixel, for at most 128 pixels. That caps how far the
+            // stream can possibly expand, and no valid file exceeds it.
+            const size_t avail = size - pos;
+            const size_t packets = (avail + bytesPerPixel) / (1u + bytesPerPixel);
+            if (pixelCount > packets * 128)
+                return E_FAIL;
+        }
+        else if (pos + rawBytes > size)
+        {
+            return E_FAIL;
+        }
 
         std::vector<BYTE> raw;
         try
@@ -405,8 +433,7 @@ namespace ozimg
         }
         else
         {
-            if (pos + rawBytes > size)
-                return E_FAIL;
+            // Already bounds-checked above, before the allocation.
             memcpy(raw.data(), data + pos, rawBytes);
         }
 

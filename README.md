@@ -92,6 +92,29 @@ Dependencies: Win32 only (`gdi32`, `msimg32`, `ole32`, `advapi32`, `shlwapi`,
 `shell32`, `windowscodecs`). Built with `/MT`, so no VC++ redistributable is
 needed.
 
+## Robustness
+
+The TGA decoder is hand-written, and it parses a file the user only had to
+download, inside the shell's own host process. It is written for hostile
+input:
+
+- Every read is bounds-checked against the buffer - the color map, the RLE
+  packets and the pixel block alike. A malformed file returns an error instead
+  of reading past the end.
+- Nothing is allocated for what a header merely claims. An RLE packet yields at
+  most 128 pixels per header byte, so the payload length caps the pixel count
+  from above; a 27 byte file declaring 65535x1525 is rejected outright rather
+  than costing half a gigabyte first. Uncompressed images have to carry their
+  pixels, which is checked before the buffer is sized.
+- `test\fuzz.cpp` builds the decoders under AddressSanitizer and hammers them
+  with the game's own files, mutated - header fields rewritten, bytes flipped,
+  buffers truncated at random points. 2.07 million runs over a stock client,
+  three seeds, no out-of-bounds access.
+
+BMP and JPEG go to WIC, the decoder Explorer already runs for `.bmp` and
+`.jpg`. This project adds no parsing of its own there, only the offset the
+image starts at.
+
 ## Build
 
 ```bat
@@ -149,6 +172,17 @@ preview mode paints through `WM_PRINTCLIENT`, so no window has to be visible.
 
 Point it at real game files - `Data\Effect`, `Data\Interface` and
 `Data\World*` are full of all three formats.
+
+The fuzzer is a separate build, because AddressSanitizer has to be compiled in:
+
+```bat
+test\build-fuzz.cmd
+build\fuzz.exe "D:\MU\Data" 300 1
+```
+
+It walks the directory for `.ozb`, `.ozj` and `.ozt`, decodes each one clean,
+then mutates every file the given number of times. Any out-of-bounds access
+aborts with an ASan report naming the line.
 
 ## Release
 

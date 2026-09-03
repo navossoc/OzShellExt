@@ -94,6 +94,30 @@ Dependências: só Win32 (`gdi32`, `msimg32`, `ole32`, `advapi32`, `shlwapi`,
 `shell32`, `windowscodecs`). Compilado com `/MT`, então não precisa do VC++
 redistributable.
 
+## Robustez
+
+O decoder de TGA é escrito à mão e faz parse de um arquivo que o usuário só
+precisou baixar, dentro do host do próprio shell. Ele é escrito para entrada
+hostil:
+
+- Toda leitura é checada contra o buffer - o color map, os pacotes RLE e o
+  bloco de pixels. Um arquivo malformado devolve erro em vez de ler além do
+  fim.
+- Nada é alocado pelo que o cabeçalho apenas alega. Um pacote RLE rende no
+  máximo 128 pixels por byte de header, então o tamanho do payload limita a
+  contagem de pixels por cima; um arquivo de 27 bytes declarando 65535x1525 é
+  rejeitado direto, em vez de custar meio gigabyte antes. Imagens sem
+  compressão precisam trazer os pixels, o que é conferido antes de dimensionar
+  o buffer.
+- O `test\fuzz.cpp` compila os decoders sob AddressSanitizer e os martela com
+  os próprios arquivos do jogo, mutados - campos de cabeçalho reescritos, bytes
+  trocados, buffers truncados em pontos aleatórios. 2,07 milhões de execuções
+  sobre um client de fábrica, três seeds, nenhum acesso fora dos limites.
+
+BMP e JPEG vão para o WIC, o decoder que o Explorer já roda para `.bmp` e
+`.jpg`. Este projeto não acrescenta parse próprio ali, só o offset onde a
+imagem começa.
+
 ## Build
 
 ```bat
@@ -151,6 +175,18 @@ preview pinta via `WM_PRINTCLIENT`, então nenhuma janela precisa estar visível
 
 Aponte para arquivos reais do jogo - `Data\Effect`, `Data\Interface` e
 `Data\World*` são cheios dos três formatos.
+
+O fuzzer é um build à parte, porque o AddressSanitizer precisa ser compilado
+junto:
+
+```bat
+test\build-fuzz.cmd
+build\fuzz.exe "D:\MU\Data" 300 1
+```
+
+Ele varre o diretório atrás de `.ozb`, `.ozj` e `.ozt`, decodifica cada um
+limpo e depois muta cada arquivo o número de vezes pedido. Qualquer acesso fora
+dos limites aborta com um relatório do ASan apontando a linha.
 
 ## Release
 
